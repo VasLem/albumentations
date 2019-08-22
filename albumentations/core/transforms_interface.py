@@ -7,6 +7,8 @@ import cv2
 from albumentations.core.serialization import SerializableMeta
 from albumentations.core.six import add_metaclass
 from albumentations.core.utils import format_args
+from albumentations.core.numpy_core import TransformsArray
+from albumentations.core.lists_core import TransformsList
 
 __all__ = ['to_tuple', 'BasicTransform', 'DualTransform', 'ImageOnlyTransform', 'NoOp']
 
@@ -81,8 +83,28 @@ class BasicTransform(object):
         target_function = self.targets.get(transform_key, lambda x, **p: x)
         return target_function
 
+    def keep_memory(self, quant, **params):
+        try:
+            getattr(quant, 'transforms')
+        except AttributeError:
+            try:
+                quant.transforms = []
+            except AttributeError:
+                import numpy as np
+                if isinstance(quant, np.ndarray):
+                    quant = TransformsArray(quant)
+                elif isinstance(quant, list):
+                    quant = TransformsList(quant)
+                else:
+                    raise
+        quant.transforms.append({'transform': self, 'params': params})
+
     def apply(self, img, **params):
         raise NotImplementedError
+
+    def _apply(self, quant, *args, **kwargs):
+        self.keep_memory(quant, *args, **kwargs)
+        return self.apply(quant, *args, **kwargs)
 
     def get_params(self):
         return {}
@@ -162,11 +184,23 @@ class DualTransform(BasicTransform):
 
     @property
     def targets(self):
-        return {'image': self.apply,
-                'mask': self.apply_to_mask,
+        return {'image': self._apply,
+                'mask': self._apply_to_mask,
                 'masks': self.apply_to_masks,
-                'bboxes': self.apply_to_bboxes,
-                'keypoints': self.apply_to_keypoints}
+                'bboxes': self._apply_to_bboxes,
+                'keypoints': self._apply_to_keypoints}
+
+    def _apply_to_bboxes(self, bboxes, **params):
+        self.keep_memory(bboxes, **params)
+        return self.apply_to_bboxes(bboxes, **params)
+
+    def _apply_to_keypoints(self, keypoints, **params):
+        self.keep_memory(keypoints, **params)
+        return self.apply_to_keypoints(keypoints, **params)
+
+    def _apply_to_mask(self, mask, **params):
+        self.keep_memory(mask, **params)
+        return self.apply_to_mask(mask, **params)
 
     def apply_to_bbox(self, bbox, **params):
         raise NotImplementedError('Method apply_to_bbox is not implemented in class ' + self.__class__.__name__)
